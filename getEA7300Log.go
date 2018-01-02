@@ -32,7 +32,7 @@ func main() {
 	// Have arguments, attempt connect.
 
 	var gwUrlString = fmt.Sprintf("http://%s/sysinfo.cgi", ipString)
-	logwriter.Initialize(gwUrlString)
+	logwriter.Initialize(gwUrlString, adminUsername, password)
 	logwriter.LoadSysinfo(gwUrlString, nil)
 }
 
