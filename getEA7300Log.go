@@ -5,6 +5,7 @@ import (
 	"flag"
 	"errors"
 	"github.com/theanandramakrishna/ea7300logger/logwriter"
+	"sync"
 )
 
 const GATEWAY_HELP = "ip address in x.x.x.x form for the gateway"
@@ -16,6 +17,7 @@ var ipString string
 var adminUsername string
 var password string
 var helpMode bool
+var args []string
 
 func main() {
 	var err error = initArgs()
@@ -30,15 +32,21 @@ func main() {
 	}
 
 	// Have arguments, attempt connect.
+	var wg sync.WaitGroup
+	var outchan chan logwriter.LogData = make(chan logwriter.LogData, 10)
 
 	var gwUrlString = fmt.Sprintf("http://%s/sysinfo.cgi", ipString)
-	logwriter.Initialize(gwUrlString, adminUsername, password)
-	logwriter.LoadSysinfo(gwUrlString, nil)
+	logwriter.Initialize(gwUrlString, adminUsername, password, args, outchan)
+
+	wg.Add(1)	
+	go logwriter.Start(gwUrlString, &wg)
+
+	wg.Wait()
 }
 
 func printUsage() {
 	fmt.Printf("Usage: \n\n")
-	fmt.Printf("\tgetEA7300Log -g <gateway ip> -u <admin username> -p <password>\n")
+	fmt.Printf("\tgetEA7300Log -g <gateway ip> -u <admin username> -p <password> [ip1] [ip2] ...\n")
 }
 func initArgs() error {
 	// Extract out ip address and password 
@@ -60,7 +68,10 @@ func initArgs() error {
 
 	if adminUsername == "" {
 		return errors.New("Missing required argument: admin user name")
+		
 	}
+
+	args = flag.Args()
 
 	return nil
 }

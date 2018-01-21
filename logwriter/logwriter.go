@@ -14,11 +14,16 @@ import (
 const TAIL_CMD = "tail -200 /var/log/messages"
 const IPV6_CMD = "/var/log/ipv6.log"
 const UTOPIA = "UTOPIA: FW.LAN2WAN ACCEPT"
+const NONE = "(none)"
+const SRC = "SRC"
+const DST = "DST"
 
 var _gwUrlString string
 var _httpClient http.Client = http.Client {}
 var _username string
 var _password string
+var _filtersrc []string
+var _outchan chan LogData
 
 type LogData struct {
 	TimeStamp time.Time
@@ -26,18 +31,32 @@ type LogData struct {
 	DestIP string
 }
 
-func Initialize(gwUrlString string, username string, password string) {
+func Initialize(gwUrlString string, username string, password string, filtersrc []string, outchan chan LogData) {
 	_gwUrlString = gwUrlString
 	_username = username
 	_password = password
+	_filtersrc = filtersrc
+	_outchan = outchan
 }
 
-func LoadSysinfo(gwUrl string, wg *sync.WaitGroup) error {
-	if wg != nil {
-		defer wg.Done()		
-	}
-	log.Printf("Fetching %s...", gwUrl)
+func Start(gwUrl string, wg *sync.WaitGroup) error {
+	defer wg.Done()		
 
+	initProcessor(_outchan)
+	wg.Add(1)
+	go process(wg)
+
+	for ; ; {
+		log.Printf("Fetching %s...", gwUrl)
+		err := doRequest(gwUrl)
+		if err != nil {
+			return err
+		}
+		log.Printf("Sleeping 5 seconds...")
+		time.Sleep(time.Second * 5)
+	}
+}
+func doRequest(gwUrl string) error {
 	req, err := http.NewRequest("GET", gwUrl, nil)
 	if err != nil {
 		log.Printf("Could not create request. %s", err)
@@ -60,7 +79,7 @@ func LoadSysinfo(gwUrl string, wg *sync.WaitGroup) error {
 		return err
 	}
 
-	parseBody(res.Body)
+	parseBody(res.Body)	
 	return nil
 }
 
@@ -107,6 +126,7 @@ func parseVarLogMessages(bufBody *bufio.Reader) {
 
 func parseLogLine(line string) *LogData {
 	var logData LogData
+	var err error
 
 	idx := strings.Index(line, UTOPIA)
 	if idx == -1 {
@@ -114,16 +134,22 @@ func parseLogLine(line string) *LogData {
 		return nil
 	}
 
-	var lineVals []string = strings.Split(line[:idx + len(UTOPIA)], " ")
+	var lineVals []string = strings.Split(strings.TrimSpace(line[idx + len(UTOPIA):]), " ")
 	if len(lineVals) == 0 {
 		return nil
 	}
-
-	logData.TimeStamp, err := time.Parse("Jan  2 00:02:43", line)
-	if err != nil {
+	
+	idx = strings.Index(line, NONE)
+	if idx == -1 {
 		return nil
 	}
-
+	
+	logData.TimeStamp, err = time.Parse(time.Stamp, strings.TrimSpace(line[:idx]))
+	if err != nil {
+		log.Printf(err.Error())
+		return nil
+	}
+	
 	for _, val := range lineVals {
 		var keyval []string = strings.Split(val, "=")
 		// keyval[0] should be the name and keyval[1] should be the value
@@ -131,17 +157,23 @@ func parseLogLine(line string) *LogData {
 			continue
 		}
 
-		if keyval[0] == "SRC" {
+		if keyval[0] == SRC {
 			logData.SrcIP = keyval[1]
-		} else if keyval[0] == "DEST" {
+		} else if keyval[0] == DST {
 			logData.DestIP = keyval[1]
 		}
 	}
 
+	for _, val := range _filtersrc {
+		if logData.SrcIP != val {
+			return nil;	// src ip address not found in filter
+		}
+	}
 	return &logData
 	
 }
 
 func outputLogData(logData *LogData) {
-	log.Printf("time %s|FROM %s|TO %s", logData.TimeStamp, logData.SrcIP, logData.DestIP)
+	//log.Printf("++++++++++ time %s|FROM %s|TO %s", logData.TimeStamp, logData.SrcIP, logData.DestIP)
+	_outchan <- *logData
 }
